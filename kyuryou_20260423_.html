@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>支給控除一覧表 変換システム v4（給料・賞与対応）</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * { font-family: Arial, sans-serif !important; }
+
+        /* ===== 印刷設定 ===== */
+        @media print {
+            @page { size: A4 landscape; margin: 4mm; }
+            body { margin: 0; padding: 0;
+                   -webkit-print-color-adjust: exact !important;
+                   print-color-adjust: exact !important; }
+            .no-print  { display: none !important; }
+            .page-break { page-break-after: always; }
+            .page-section { margin-bottom: 0 !important; padding: 3mm !important; }
+            table { font-size: 6.5pt !important; }
+            th, td { padding: 1px 2px !important; }
+            thead { display: table-header-group; }
+            tr { page-break-inside: avoid; }
+            h2 { font-size: 10pt !important; margin-bottom: 1mm !important; }
+            h3 { font-size: 7.5pt !important; margin-bottom: 1mm !important;
+                 padding: 1px 4px !important; }
+            .section-gap { margin-bottom: 3mm !important; }
+            .mt-gap { margin-top: 3mm !important; }
+        }
+
+        /* ===== テーブル共通 ===== */
+        table { table-layout: fixed; width: 100%; font-size: 8pt; border-collapse: collapse; }
+
+        /* 先頭2列だけ固定幅、残りはauto（均等分配） */
+        col.fixed-code { width: 82px; }
+        col.fixed-name { width: 82px; }
+
+        th, td { padding: 2px 3px; box-sizing: border-box; overflow: hidden; }
+        td { white-space: nowrap; }
+        th {
+            white-space: normal;
+            word-break: keep-all;
+            vertical-align: middle;
+            text-align: center;
+            line-height: 1.3;
+            font-size: 7.5pt;
+        }
+
+        .col-header   { background-color: #cbd5e1 !important; font-weight: bold; text-align: center !important; }
+        .header-cell  { text-align: center !important; vertical-align: middle !important;
+                        background-color: #e5e7eb !important; font-weight: bold; }
+        .data-cell    { text-align: right !important; padding-right: 4px !important; }
+
+        .row-white       { background-color: #ffffff; }
+        .row-gray        { background-color: #f1f5f9; }
+        .row-total       { background-color: #fef3c7 !important; font-weight: bold; }
+        .row-grand-total { background-color: #fcd34d !important; font-weight: bold; }
+
+        .page-section { margin-bottom: 32px; }
+        .section-gap  { margin-bottom: 10px; }
+        .mt-gap       { margin-top: 10px; }
+
+        /* ===== UIボタン ===== */
+        .mode-btn { padding: 10px 28px; border-radius: 8px; font-size: 15px;
+                    font-weight: bold; border: 2px solid transparent; cursor: pointer; transition: all 0.2s; }
+        .mode-btn-salary.active       { background:#2563eb; color:white; border-color:#1d4ed8; }
+        .mode-btn-salary:not(.active) { background:#eff6ff; color:#2563eb; border-color:#bfdbfe; }
+        .mode-btn-bonus.active        { background:#d97706; color:white; border-color:#b45309; }
+        .mode-btn-bonus:not(.active)  { background:#fffbeb; color:#d97706; border-color:#fde68a; }
+        .mode-badge-salary { display:inline-block; background:#dbeafe; color:#1e40af;
+            border-radius:6px; padding:2px 10px; font-size:12px; font-weight:bold; margin-left:8px; }
+        .mode-badge-bonus  { display:inline-block; background:#fef3c7; color:#92400e;
+            border-radius:6px; padding:2px 10px; font-size:12px; font-weight:bold; margin-left:8px; }
+    </style>
+</head>
+<body class="min-h-screen bg-gray-50 p-4">
+<div class="max-w-full mx-auto">
+
+    <!-- ヘッダー（印刷非表示） -->
+    <div class="bg-white rounded-lg shadow-md p-6 mb-6 no-print">
+        <h1 class="text-2xl font-bold text-gray-800 mb-1">支給控除一覧表 変換システム v4</h1>
+        <p class="text-gray-500 text-sm mb-5">King of Time CSV → TKC形式帳票（給料・賞与対応）</p>
+
+        <div class="mb-5">
+            <p class="text-sm font-semibold text-gray-600 mb-2">▶ まず帳票の種類を選んでください</p>
+            <div class="flex gap-3">
+                <button id="btnSalary" class="mode-btn mode-btn-salary active" onclick="setMode('salary')">💴 給料</button>
+                <button id="btnBonus"  class="mode-btn mode-btn-bonus"         onclick="setMode('bonus')">🎁 賞与</button>
+            </div>
+            <p id="modeDesc" class="text-xs text-gray-500 mt-2">給料モード：基本給・各種手当を表示します</p>
+        </div>
+
+        <div class="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors">
+            <input type="file" accept=".csv" id="csvUpload" class="hidden" multiple />
+            <label for="csvUpload" class="cursor-pointer">
+                <svg class="mx-auto h-12 w-12 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+                <p class="text-lg font-medium text-gray-700 mb-2">CSVファイルをアップロード（複数選択可）</p>
+                <p class="text-sm text-gray-500">複数の部門CSVファイルを同時に選択できます</p>
+            </label>
+        </div>
+        <div id="statusMessage" class="mt-4 hidden"></div>
+    </div>
+
+    <div id="reportPreview" class="hidden"><div id="allPages"></div></div>
+</div>
+
+<script>
+    let allDepartmentData = [];
+    let currentMode = 'salary';
+    const EMPLOYEES_PER_PAGE = 10;
+
+    // ========== モード切り替え ==========
+    function setMode(mode) {
+        currentMode = mode;
+        document.getElementById('btnSalary').classList.toggle('active', mode === 'salary');
+        document.getElementById('btnBonus').classList.toggle('active', mode === 'bonus');
+        document.getElementById('modeDesc').textContent = mode === 'salary'
+            ? '給料モード：基本給・各種手当を表示します'
+            : '賞与モード：基本賞与（時給制含む合算）を表示します';
+        if (allDepartmentData.length > 0) renderAllReports();
+    }
+
+    // ========== ユーティリティ ==========
+    function formatCurrency(v) {
+        if (v === null || v === undefined || v === '' || v === '0') return '';
+        const n = parseInt(String(v).replace(/,/g, ''));
+        if (isNaN(n) || n === 0) return '';
+        return n.toLocaleString('ja-JP');
+    }
+    function parseNum(v) { return parseInt(String(v||'').replace(/,/g,'')) || 0; }
+
+    function showStatus(msg, isError=false) {
+        const el = document.getElementById('statusMessage');
+        el.className = `mt-4 p-4 rounded-lg ${isError?'bg-red-50 border border-red-200':'bg-green-50 border border-green-200'}`;
+        el.innerHTML = `<div class="flex items-center justify-between">
+            <span class="${isError?'text-red-700':'text-green-700'}">${msg}</span>
+            ${!isError?'<button onclick="printPDF()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md">PDF出力</button>':''}
+        </div>`;
+        el.classList.remove('hidden');
+    }
+
+    // ========== CSV読み込み ==========
+    function handleFileUpload(event) {
+        const files = event.target.files;
+        if (!files || !files.length) return;
+        allDepartmentData = [];
+        let processed = 0;
+        const fileArray = Array.from(files);
+
+        fileArray.forEach(file => {
+            const reader = new FileReader();
+            reader.onload = e => {
+                try {
+                    const data = Papa.parse(e.target.result, { skipEmptyLines: true }).data;
+                    if (data.length < 3) throw new Error(`${file.name}: データ不足`);
+                    const periodLine = data[0][0] || '';
+                    const m = periodLine.match(/(\d{4})年(\d{1,2})月/);
+                    const period = m ? `${m[1]}年${m[2]}月分` : periodLine;
+                    const headers = data[2];
+                    let deptName = '';
+                    const employees = [];
+
+                    for (let i = 3; i < data.length; i++) {
+                        const row = data[i];
+                        if (!row || !row[0]) continue;
+                        const code = row[0];
+                        if (code.includes('合計') || code.includes('人数計') ||
+                            code.includes('一覧表') || code.includes('全社') ||
+                            code === '管理部' || code === '営業' || code === '事務職') {
+                            if (code.includes('人数計') && !code.includes('全社'))
+                                deptName = code.replace('人数計','').replace('合計','').trim();
+                            continue;
+                        }
+                        const rowData = {};
+                        headers.forEach((h, idx) => { rowData[h] = row[idx] || ''; });
+                        employees.push(rowData);
+                    }
+                    if (!deptName) deptName = file.name.replace('.csv','').replace(/\d{8}_/,'').replace(/_\d{8}/,'');
+                    allDepartmentData.push({ department: deptName, period, employees });
+
+                    if (++processed === fileArray.length) {
+                        allDepartmentData.sort((a,b) => a.department.localeCompare(b.department,'ja'));
+                        renderAllReports();
+                        const tot = allDepartmentData.reduce((s,d) => s+d.employees.length, 0);
+                        showStatus(`【${currentMode==='salary'?'給料':'賞与'}モード】${fileArray.length}件 読込完了（計${tot}名）`);
+                    }
+                } catch(err) { showStatus(`${file.name}: ${err.message}`, true); }
+            };
+            reader.onerror = () => showStatus(`${file.name}: 読込失敗`, true);
+            reader.readAsText(file, 'UTF-8');
+        });
+    }
+
+    // ========== 合計計算 ==========
+    function calcTotal(employees) {
+        const fields = [
+            '基本給','基本給 (時給制)','基本賞与','基本賞与 (時給制)',
+            '職務手当','役付手当','家族手当','住宅手当','休業手当','休業控除',
+            '特別手当','その他','割増手当 残業','遅刻早退外出控除',
+            '非課税通勤手当','課税支給合計','支給合計',
+            '健康保険料','介護保険料','子ども・子育て支援金','厚生年金保険料','雇用保険料',
+            '社会保険料合計','社保控除後合計','所得税','住民税',
+            '仮払金','お弁当代','制服代','返済','立替金','控除合計','差引支給合計'
+        ];
+        const t = {};
+        fields.forEach(f => { t[f] = employees.reduce((s,e) => s+parseNum(e[f]), 0); });
+        t['基本給_表示']   = t['基本給']   + t['基本給 (時給制)'];
+        t['基本賞与_表示'] = t['基本賞与'] + t['基本賞与 (時給制)'];
+        return t;
+    }
+
+    // ========== colgroup: 先頭2列固定・残りauto ==========
+    function makeColgroup(extraCols) {
+        let s = '<colgroup><col class="fixed-code"><col class="fixed-name">';
+        for (let i = 0; i < extraCols; i++) s += '<col>';
+        return s + '</colgroup>';
+    }
+
+    // ========== セル共通クラス ==========
+    const B  = 'border border-gray-400';
+    const PY = 'px-1 py-0.5';
+
+    // ========== 支給テーブル（給料/賞与共通） ==========
+    function renderPaymentTable(employees, total) {
+        const isBonus = currentMode === 'bonus';
+        const baseKey  = isBonus ? '基本賞与_表示'  : '基本給_表示';
+        const baseLbl  = isBonus ? '基本<br>賞与'    : '基本給';
+        const rawKey1  = isBonus ? '基本賞与'        : '基本給';
+        const rawKey2  = isBonus ? '基本賞与 (時給制)' : '基本給 (時給制)';
+
+        // 固定2列 + 残り14列 = 16列
+        const cg = makeColgroup(14);
+        const th = `<thead><tr class="bg-gray-200">
+            <th class="${B} col-header header-cell">社員<br>コード</th>
+            <th class="${B} col-header header-cell">氏名</th>
+            <th class="${B} header-cell">${baseLbl}</th>
+            <th class="${B} header-cell">職務<br>手当</th>
+            <th class="${B} header-cell">役職<br>手当</th>
+            <th class="${B} header-cell">家族<br>手当</th>
+            <th class="${B} header-cell">住宅<br>手当</th>
+            <th class="${B} header-cell">休業<br>手当</th>
+            <th class="${B} header-cell">休業<br>控除</th>
+            <th class="${B} header-cell">特別<br>手当</th>
+            <th class="${B} header-cell">その他</th>
+            <th class="${B} header-cell">時間外<br>手当</th>
+            <th class="${B} header-cell">給与<br>控除額</th>
+            <th class="${B} header-cell">非課税<br>通勤手当</th>
+            <th class="${B} header-cell">課税<br>支給額計</th>
+            <th class="${B} header-cell">支給<br>合計</th>
+        </tr></thead>`;
+
+        let rows = '';
+        employees.forEach((emp, i) => {
+            const rc = i%2===0?'row-white':'row-gray';
+            const base = parseNum(emp[rawKey1]) + parseNum(emp[rawKey2]);
+            rows += `<tr class="${rc}">
+                <td class="${B} ${PY} text-center col-header">${emp['従業員コード']}</td>
+                <td class="${B} ${PY} col-header">${emp['氏名']}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(base)}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['職務手当'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['役付手当'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['家族手当'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['住宅手当'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['休業手当'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['休業控除'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['特別手当'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['その他'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['割増手当 残業'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['遅刻早退外出控除'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['非課税通勤手当'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['課税支給合計'])}</td>
+                <td class="${B} ${PY} data-cell font-bold">${formatCurrency(emp['支給合計'])}</td>
+            </tr>`;
+        });
+        if (total) rows += `<tr class="row-total">
+            <td class="${B} ${PY} col-header text-center" colspan="2">合計</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total[baseKey])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['職務手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['役付手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['家族手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['住宅手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['休業手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['休業控除'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['特別手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['その他'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['割増手当 残業'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['遅刻早退外出控除'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['非課税通勤手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['課税支給合計'])}</td>
+            <td class="${B} ${PY} data-cell font-bold">${formatCurrency(total['支給合計'])}</td>
+        </tr>`;
+
+        return `<table>${cg}${th}<tbody>${rows}</tbody></table>`;
+    }
+
+    // ========== 控除テーブル ==========
+    function renderDeductionTable(employees, total) {
+        // 固定2列 + 残り16列 = 18列
+        const cg = makeColgroup(16);
+        const th = `<thead><tr class="bg-gray-200">
+            <th class="${B} col-header header-cell">社員<br>コード</th>
+            <th class="${B} col-header header-cell">氏名</th>
+            <th class="${B} header-cell">健保<br>(一般)</th>
+            <th class="${B} header-cell">健保<br>(介護)</th>
+            <th class="${B} header-cell">健保<br>(子育)</th>
+            <th class="${B} header-cell">厚生<br>年金</th>
+            <th class="${B} header-cell">雇用<br>保険</th>
+            <th class="${B} header-cell">社会保険<br>合計</th>
+            <th class="${B} header-cell">課税<br>対象額</th>
+            <th class="${B} header-cell">所得税</th>
+            <th class="${B} header-cell">住民税</th>
+            <th class="${B} header-cell">仮払金</th>
+            <th class="${B} header-cell">食事費</th>
+            <th class="${B} header-cell">作業<br>服代</th>
+            <th class="${B} header-cell">返済</th>
+            <th class="${B} header-cell">立替金</th>
+            <th class="${B} header-cell">控除<br>合計</th>
+            <th class="${B} header-cell">差引<br>支給額</th>
+        </tr></thead>`;
+
+        let rows = '';
+        employees.forEach((emp, i) => {
+            const rc = i%2===0?'row-white':'row-gray';
+            rows += `<tr class="${rc}">
+                <td class="${B} ${PY} text-center col-header">${emp['従業員コード']}</td>
+                <td class="${B} ${PY} col-header">${emp['氏名']}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['健康保険料'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['介護保険料'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['子ども・子育て支援金'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['厚生年金保険料'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['雇用保険料'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['社会保険料合計'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['社保控除後合計'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['所得税'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['住民税'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['仮払金'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['お弁当代'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['制服代'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['返済'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['立替金'])}</td>
+                <td class="${B} ${PY} data-cell">${formatCurrency(emp['控除合計'])}</td>
+                <td class="${B} ${PY} data-cell font-bold">${formatCurrency(emp['差引支給合計'])}</td>
+            </tr>`;
+        });
+        if (total) rows += `<tr class="row-total">
+            <td class="${B} ${PY} col-header text-center" colspan="2">合計</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['健康保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['介護保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['子ども・子育て支援金'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['厚生年金保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['雇用保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['社会保険料合計'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['社保控除後合計'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['所得税'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['住民税'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['仮払金'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['お弁当代'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['制服代'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['返済'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['立替金'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(total['控除合計'])}</td>
+            <td class="${B} ${PY} data-cell font-bold">${formatCurrency(total['差引支給合計'])}</td>
+        </tr>`;
+
+        return `<table>${cg}${th}<tbody>${rows}</tbody></table>`;
+    }
+
+    // ========== メインレンダリング ==========
+    function renderAllReports() {
+        const container = document.getElementById('allPages');
+        container.innerHTML = '';
+        const modeBadge = currentMode==='salary'
+            ? `<span class="mode-badge-salary">💴 給料</span>`
+            : `<span class="mode-badge-bonus">🎁 賞与</span>`;
+
+        allDepartmentData.forEach(dept => {
+            const totalPages = Math.ceil(dept.employees.length / EMPLOYEES_PER_PAGE);
+            for (let p = 0; p < totalPages; p++) {
+                const emps   = dept.employees.slice(p*EMPLOYEES_PER_PAGE, Math.min((p+1)*EMPLOYEES_PER_PAGE, dept.employees.length));
+                const isLast = p === totalPages - 1;
+                const dtotal = isLast ? calcTotal(dept.employees) : null;
+
+                const sec = document.createElement('div');
+                sec.className = 'page-section page-break bg-white p-6 rounded-lg shadow-md mb-6';
+                sec.innerHTML = `
+                    <div class="text-center mb-3">
+                        <h2 class="text-lg font-bold">支給控除一覧表${modeBadge}</h2>
+                        <p class="text-xs text-gray-600">${dept.period}</p>
+                        <p class="text-sm font-semibold mt-1">${dept.department}${totalPages>1?`　(${p+1}/${totalPages}ページ)`:''}</p>
+                    </div>
+                    <div class="section-gap">
+                        <h3 class="text-xs font-bold mb-1 bg-blue-100 px-2 py-0.5 rounded">支給項目</h3>
+                        ${renderPaymentTable(emps, dtotal)}
+                    </div>
+                    <div class="mt-gap">
+                        <h3 class="text-xs font-bold mb-1 bg-red-100 px-2 py-0.5 rounded">控除項目</h3>
+                        ${renderDeductionTable(emps, dtotal)}
+                    </div>`;
+                container.appendChild(sec);
+            }
+        });
+
+        if (allDepartmentData.length > 1) renderGrandTotalPage(container, modeBadge);
+        document.getElementById('reportPreview').classList.remove('hidden');
+    }
+
+    // ========== 全体合計ページ ==========
+    function renderGrandTotalPage(container, modeBadge) {
+        const allEmps    = allDepartmentData.flatMap(d => d.employees);
+        const grand      = calcTotal(allEmps);
+        const period     = allDepartmentData[0]?.period || '';
+        const isBonus    = currentMode === 'bonus';
+        const baseKey    = isBonus ? '基本賞与_表示' : '基本給_表示';
+        const baseLbl    = isBonus ? '基本<br>賞与'   : '基本給';
+
+        // 全体合計：支給
+        const cgPay = makeColgroup(14);
+        let payRows = '';
+        allDepartmentData.forEach((dept,i) => {
+            const dt = calcTotal(dept.employees);
+            const rc = i%2===0?'row-white':'row-gray';
+            payRows += grandPayRow(dept.department, `${dept.employees.length}名`, dt, baseKey, rc);
+        });
+        payRows += grandPayRow('全社合計', `${allEmps.length}名`, grand, baseKey, 'row-grand-total');
+
+        // 全体合計：控除
+        const cgDed = makeColgroup(16);
+        let dedRows = '';
+        allDepartmentData.forEach((dept,i) => {
+            const dt = calcTotal(dept.employees);
+            const rc = i%2===0?'row-white':'row-gray';
+            dedRows += grandDedRow(dept.department, `${dept.employees.length}名`, dt, rc);
+        });
+        dedRows += grandDedRow('全社合計', `${allEmps.length}名`, grand, 'row-grand-total');
+
+        const sec = document.createElement('div');
+        sec.className = 'page-section bg-white p-6 rounded-lg shadow-md';
+        sec.innerHTML = `
+            <div class="text-center mb-3">
+                <h2 class="text-lg font-bold">支給控除一覧表（全体合計）${modeBadge}</h2>
+                <p class="text-xs text-gray-600">${period}</p>
+                <p class="text-sm font-semibold mt-1">全部門合計</p>
+            </div>
+            <div class="section-gap">
+                <h3 class="text-xs font-bold mb-1 bg-blue-100 px-2 py-0.5 rounded">支給項目（全体合計）</h3>
+                <table>${cgPay}
+                    <thead><tr class="bg-gray-200">
+                        <th class="${B} col-header header-cell">部門名</th>
+                        <th class="${B} header-cell">人数</th>
+                        <th class="${B} header-cell">${baseLbl}</th>
+                        <th class="${B} header-cell">職務<br>手当</th>
+                        <th class="${B} header-cell">役職<br>手当</th>
+                        <th class="${B} header-cell">家族<br>手当</th>
+                        <th class="${B} header-cell">住宅<br>手当</th>
+                        <th class="${B} header-cell">休業<br>手当</th>
+                        <th class="${B} header-cell">休業<br>控除</th>
+                        <th class="${B} header-cell">特別<br>手当</th>
+                        <th class="${B} header-cell">その他</th>
+                        <th class="${B} header-cell">時間外<br>手当</th>
+                        <th class="${B} header-cell">給与<br>控除額</th>
+                        <th class="${B} header-cell">非課税<br>通勤手当</th>
+                        <th class="${B} header-cell">課税<br>支給額計</th>
+                        <th class="${B} header-cell">支給<br>合計</th>
+                    </tr></thead>
+                    <tbody>${payRows}</tbody>
+                </table>
+            </div>
+            <div class="mt-gap">
+                <h3 class="text-xs font-bold mb-1 bg-red-100 px-2 py-0.5 rounded">控除項目（全体合計）</h3>
+                <table>${cgDed}
+                    <thead><tr class="bg-gray-200">
+                        <th class="${B} col-header header-cell">部門名</th>
+                        <th class="${B} header-cell">人数</th>
+                        <th class="${B} header-cell">健保<br>(一般)</th>
+                        <th class="${B} header-cell">健保<br>(介護)</th>
+                        <th class="${B} header-cell">健保<br>(子育)</th>
+                        <th class="${B} header-cell">厚生<br>年金</th>
+                        <th class="${B} header-cell">雇用<br>保険</th>
+                        <th class="${B} header-cell">社会保険<br>合計</th>
+                        <th class="${B} header-cell">課税<br>対象額</th>
+                        <th class="${B} header-cell">所得税</th>
+                        <th class="${B} header-cell">住民税</th>
+                        <th class="${B} header-cell">仮払金</th>
+                        <th class="${B} header-cell">食事費</th>
+                        <th class="${B} header-cell">作業<br>服代</th>
+                        <th class="${B} header-cell">返済</th>
+                        <th class="${B} header-cell">立替金</th>
+                        <th class="${B} header-cell">控除<br>合計</th>
+                        <th class="${B} header-cell">差引<br>支給額</th>
+                    </tr></thead>
+                    <tbody>${dedRows}</tbody>
+                </table>
+            </div>`;
+        container.appendChild(sec);
+    }
+
+    function grandPayRow(name, count, dt, baseKey, rc) {
+        return `<tr class="${rc}">
+            <td class="${B} ${PY} text-center col-header">${name}</td>
+            <td class="${B} ${PY} text-center">${count}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt[baseKey])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['職務手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['役付手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['家族手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['住宅手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['休業手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['休業控除'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['特別手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['その他'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['割増手当 残業'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['遅刻早退外出控除'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['非課税通勤手当'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['課税支給合計'])}</td>
+            <td class="${B} ${PY} data-cell font-bold">${formatCurrency(dt['支給合計'])}</td>
+        </tr>`;
+    }
+
+    function grandDedRow(name, count, dt, rc) {
+        return `<tr class="${rc}">
+            <td class="${B} ${PY} text-center col-header">${name}</td>
+            <td class="${B} ${PY} text-center">${count}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['健康保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['介護保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['子ども・子育て支援金'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['厚生年金保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['雇用保険料'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['社会保険料合計'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['社保控除後合計'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['所得税'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['住民税'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['仮払金'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['お弁当代'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['制服代'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['返済'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['立替金'])}</td>
+            <td class="${B} ${PY} data-cell">${formatCurrency(dt['控除合計'])}</td>
+            <td class="${B} ${PY} data-cell font-bold">${formatCurrency(dt['差引支給合計'])}</td>
+        </tr>`;
+    }
+
+    function printPDF() { window.print(); }
+    document.getElementById('csvUpload').addEventListener('change', handleFileUpload);
+</script>
+</body>
+</html>
