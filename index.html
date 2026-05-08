@@ -18,8 +18,8 @@
             .no-print  { display: none !important; }
             .page-break { page-break-after: always; }
             .page-section { margin-bottom: 0 !important; padding: 3mm !important; }
-            table { font-size: 6.5pt !important; }
-            th, td { padding: 1px 2px !important; }
+            table { font-size: 7.5pt !important; }
+            th, td { padding: 4px 2px !important; }
             thead { display: table-header-group; }
             tr { page-break-inside: avoid; }
             h2 { font-size: 10pt !important; margin-bottom: 1mm !important; }
@@ -32,9 +32,16 @@
         /* ===== テーブル共通 ===== */
         table { table-layout: fixed; width: 100%; font-size: 8pt; border-collapse: collapse; }
 
-        /* 先頭2列だけ固定幅、残りはauto（均等分配） */
-        col.fixed-code { width: 82px; }
-        col.fixed-name { width: 82px; }
+        /* 1枚目：社員コード60px・氏名100px */
+        col.fixed-code { width: 60px; }
+        col.fixed-name { width: 100px; }
+
+        /* 2枚目（全体合計）：部門名140px・人数40px */
+        col.fixed-dept { width: 140px; }
+        col.col-count  { width: 40px; }
+
+        /* 一番右の列：気持ち広め */
+        col.col-last   { width: 72px; }
 
         th, td { padding: 2px 3px; box-sizing: border-box; overflow: hidden; }
         td { white-space: nowrap; }
@@ -143,6 +150,23 @@
         el.classList.remove('hidden');
     }
 
+    // ========== 部門名を2段表示（長い場合は「勤怠支給」などで改行） ==========
+    function formatDeptName(name) {
+        const breakWords = ['勤怠支給', '給与支給', '支給控除', '支給管理'];
+        for (const word of breakWords) {
+            const idx = name.indexOf(word);
+            if (idx > 0) {
+                return name.slice(0, idx) + '<br>' + name.slice(idx);
+            }
+        }
+        // 10文字超の場合は中間で改行
+        if (name.length > 10) {
+            const mid = Math.ceil(name.length / 2);
+            return name.slice(0, mid) + '<br>' + name.slice(mid);
+        }
+        return name;
+    }
+
     // ========== CSV読み込み ==========
     function handleFileUpload(event) {
         const files = event.target.files;
@@ -213,10 +237,18 @@
         return t;
     }
 
-    // ========== colgroup: 先頭2列固定・残りauto ==========
-    function makeColgroup(extraCols) {
-        let s = '<colgroup><col class="fixed-code"><col class="fixed-name">';
-        for (let i = 0; i < extraCols; i++) s += '<col>';
+    // ========== colgroup生成 ==========
+    // type='employee'：社員コード(fixed-code)+氏名(fixed-name)+中間列auto×midCols+最終列(col-last)
+    // type='dept'    ：部門名(fixed-dept)+人数(col-count)+中間列auto×midCols+最終列(col-last)
+    function makeColgroup(midCols, type='employee') {
+        let s = '<colgroup>';
+        if (type === 'dept') {
+            s += '<col class="fixed-dept"><col class="col-count">';
+        } else {
+            s += '<col class="fixed-code"><col class="fixed-name">';
+        }
+        for (let i = 0; i < midCols; i++) s += '<col>';
+        s += '<col class="col-last">';
         return s + '</colgroup>';
     }
 
@@ -224,16 +256,16 @@
     const B  = 'border border-gray-400';
     const PY = 'px-1 py-0.5';
 
-    // ========== 支給テーブル（給料/賞与共通） ==========
+    // ========== 支給テーブル ==========
     function renderPaymentTable(employees, total) {
         const isBonus = currentMode === 'bonus';
-        const baseKey  = isBonus ? '基本賞与_表示'  : '基本給_表示';
-        const baseLbl  = isBonus ? '基本<br>賞与'    : '基本給';
-        const rawKey1  = isBonus ? '基本賞与'        : '基本給';
+        const baseKey  = isBonus ? '基本賞与_表示'    : '基本給_表示';
+        const baseLbl  = isBonus ? '基本<br>賞与'      : '基本給';
+        const rawKey1  = isBonus ? '基本賞与'          : '基本給';
         const rawKey2  = isBonus ? '基本賞与 (時給制)' : '基本給 (時給制)';
 
-        // 固定2列 + 残り14列 = 16列
-        const cg = makeColgroup(14);
+        // 固定2列 + 中間13列 + 最終1列(col-last) = 16列
+        const cg = makeColgroup(13, 'employee');
         const th = `<thead><tr class="bg-gray-200">
             <th class="${B} col-header header-cell">社員<br>コード</th>
             <th class="${B} col-header header-cell">氏名</th>
@@ -299,8 +331,8 @@
 
     // ========== 控除テーブル ==========
     function renderDeductionTable(employees, total) {
-        // 固定2列 + 残り16列 = 18列
-        const cg = makeColgroup(16);
+        // 固定2列 + 中間15列 + 最終1列(col-last) = 18列
+        const cg = makeColgroup(15, 'employee');
         const th = `<thead><tr class="bg-gray-200">
             <th class="${B} col-header header-cell">社員<br>コード</th>
             <th class="${B} col-header header-cell">氏名</th>
@@ -410,15 +442,14 @@
 
     // ========== 全体合計ページ ==========
     function renderGrandTotalPage(container, modeBadge) {
-        const allEmps    = allDepartmentData.flatMap(d => d.employees);
-        const grand      = calcTotal(allEmps);
-        const period     = allDepartmentData[0]?.period || '';
-        const isBonus    = currentMode === 'bonus';
-        const baseKey    = isBonus ? '基本賞与_表示' : '基本給_表示';
-        const baseLbl    = isBonus ? '基本<br>賞与'   : '基本給';
+        const allEmps = allDepartmentData.flatMap(d => d.employees);
+        const grand   = calcTotal(allEmps);
+        const period  = allDepartmentData[0]?.period || '';
+        const isBonus = currentMode === 'bonus';
+        const baseKey = isBonus ? '基本賞与_表示' : '基本給_表示';
+        const baseLbl = isBonus ? '基本<br>賞与'   : '基本給';
 
-        // 全体合計：支給
-        const cgPay = makeColgroup(14);
+        const cgPay = makeColgroup(13, 'dept');
         let payRows = '';
         allDepartmentData.forEach((dept,i) => {
             const dt = calcTotal(dept.employees);
@@ -427,8 +458,7 @@
         });
         payRows += grandPayRow('全社合計', `${allEmps.length}名`, grand, baseKey, 'row-grand-total');
 
-        // 全体合計：控除
-        const cgDed = makeColgroup(16);
+        const cgDed = makeColgroup(15, 'dept');
         let dedRows = '';
         allDepartmentData.forEach((dept,i) => {
             const dt = calcTotal(dept.employees);
@@ -500,7 +530,7 @@
 
     function grandPayRow(name, count, dt, baseKey, rc) {
         return `<tr class="${rc}">
-            <td class="${B} ${PY} text-center col-header">${name}</td>
+            <td class="${B} ${PY} col-header" style="white-space:normal;line-height:1.4;">${formatDeptName(name)}</td>
             <td class="${B} ${PY} text-center">${count}</td>
             <td class="${B} ${PY} data-cell">${formatCurrency(dt[baseKey])}</td>
             <td class="${B} ${PY} data-cell">${formatCurrency(dt['職務手当'])}</td>
@@ -521,7 +551,7 @@
 
     function grandDedRow(name, count, dt, rc) {
         return `<tr class="${rc}">
-            <td class="${B} ${PY} text-center col-header">${name}</td>
+            <td class="${B} ${PY} col-header" style="white-space:normal;line-height:1.4;">${formatDeptName(name)}</td>
             <td class="${B} ${PY} text-center">${count}</td>
             <td class="${B} ${PY} data-cell">${formatCurrency(dt['健康保険料'])}</td>
             <td class="${B} ${PY} data-cell">${formatCurrency(dt['介護保険料'])}</td>
